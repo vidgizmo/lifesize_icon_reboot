@@ -1,0 +1,320 @@
+#!/bin/bash 
+#set -x
+#set -v
+##################################################################
+#
+# Script to reboot one or several Lifesize Icon systems.
+#
+# The parameters are just the list of IP addresses or DNS names
+# for the systems you want to reboot.
+#
+# The script will make a few checks before rebooting the system:
+#  - confirm we can reach it via http (our command method)
+#  - confirm the system is not being upgraded
+#  - confirm the system is not in a call
+# 
+# If any of these conditions fail, then we will display a message
+# and skip to the next device provided in the list.
+#
+# The script was written to on a linux system with bash. It 
+# requires the following additional packages/programs:
+#  - curl - a command line utility to transfer data from 
+#    several different kinds of servers inclusing http
+#  - resty - a command line utility to handle REST commands
+#    to a specified http server
+#  - jq - a command line utility that simplifies parsing
+#    of json data like that returned from several REST 
+#    servers
+# 
+# TODO:
+#  - possibly add getopt 
+#  - add option for passing in admin password
+#  - add option for don't do the reboot, just test
+#
+##################################################################
+PROGNAME=$(basename "$0")
+ADMIN_PASS=admin
+HTTP_TIMEOUT=3
+
+PATH_TO_SCRIPT=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
+
+PATH="${PATH_TO_SCRIPT}:${PATH}"
+
+function cleanexit() {
+        if [ ! -z "${ERR_FILE}" ]; then
+                rm "${ERR_FILE}"
+        fi
+        exit $1
+}
+
+function err_echo()
+{
+        echo "$*" >&2
+}
+
+# signal handling so we can control the exit messages
+function exit_with_trap() {
+        err_echo "Exiting ${PROGNAME} with signal $1"
+        cleanexit 1
+}
+
+function trap_with_arg() {
+    func="$1" ; shift
+    for sig ; do
+        trap "$func $sig" "$sig"
+    done
+}
+
+trap_with_arg exit_with_trap SIGHUP SIGKILL SIGQUIT SIGABRT SIGINT SIGTERM
+
+function usage()
+{
+        err_echo "Usage: ${PROGNAME} [options] IP [IP ...]"
+        err_echo "  Options/Arguments:"
+        err_echo "   -n        run the script, but do NOT do the actual reboot, just report."
+        err_echo "   -p pass   provide the admin password on the commandline."
+        err_echo "   -d        enable debug mode"
+        err_echo "   IP        IP address (or DNS name) of Lifesize Icon. You can have"
+        err_echo "             one or more IP addresses on the command line."
+        err_echo
+        err_echo "NOTE:"
+        err_echo "  The easiest way to provide the list of IP addresses is to put them in a"
+        err_echo "  text file and then use the text file like this on the command line:"
+        err_echo "  ${PROGNAME} "'$(cat FILE_OF_IP_ADDRESSES)'
+        err_echo
+}
+
+while getopts ":np:dh" flag; do
+
+        if [ ! -z "${OPTARG}" -a  "${OPTARG}" = ":" ]; then
+                usage
+                cleanexit 1
+        fi
+        case "${flag}" in
+                n)
+                        SKIP_REBOOT=true
+                        ;;
+                p)
+                        ADMIN_PASS=${OPTARG}
+                        echo "Setting admin password as: ${ADMIN_PASS}"
+                        ;;
+                d)
+                        set -x
+                        set -v
+                        ;;
+                :)   
+                        err_echo "Missing option argument for -$OPTARG" >&2
+                        usage
+                        cleanexit 1
+                        ;;
+                \?)
+                        err_echo
+                        usage
+                        cleanexit 1
+                        ;;
+                h)
+                        usage
+                        cleanexit 1
+                        ;;
+        esac
+
+done
+
+shift $((OPTIND-1))  #This tells getopts to move on to the next argument.
+
+# Make sure we have at least one IP address specified
+if [ $# -lt 1 ]; then
+        err_echo "No IP addresses or DNS names found on command line"
+        err_echo
+        usage
+        exit 1
+fi
+
+# Make sure curl is on this system
+which curl &> /dev/null || { 
+        err_echo "This script requires \"curl\" "
+        err_echo
+        MISSING_PROGRAMS=true
+}
+
+# Make sure jq is on this system
+which jq &> /dev/null || { 
+        err_echo "This script requires \"jq\". Use your linux package manager to install it"
+        err_echo "  On ubuntu you would type: sudo apt-get install jq"
+        err_echo "  Or you can get it here: http://stedolan.github.io/jq/"
+        err_echo
+        MISSING_PROGRAMS=true
+}
+
+# Make sure the version of jq has the features we need (specifically the -e option)
+JQ_TEST_VAL=$(echo '{"test":"good"}' | jq -e -r .test 2> /dev/null ) ;  JQ_RETCODE=$?
+[[ "${JQ_RETCODE}" -eq 0 && "$JQ_TEST_VAL" == "good"  ]] || {
+        err_echo "This script requires \"jq\" versoin 1.4 or newer."
+        err_echo "Your system is running $(jq --version 2>&1)."
+        err_echo "You may need to download and build the source from here:"
+        err_echo "  http://stedolan.github.io/jq/download/"
+        err_echo "Find the section that says \"From source on Linux, OS X, Cygwin, and other POSIX-like operating systems\"."
+        err_echo "and follow the directions."
+        err_echo
+        MISSING_PROGRAMS=true
+}
+
+# Make sure resty is on this system
+. resty || {
+        err_echo "This script requires \"resty\" which should have been provided with this"
+        err_echo "script, but if not, you can get it here:"
+        err_echo "  http://github.com/micha/resty/raw/master/resty"
+        err_echo
+        MISSING_PROGRAMS=true
+}
+
+# If any of the required programs were missing, then we abort
+[[ ! -z "${MISSING_PROGRAMS}" && "${MISSING_PROGRAMS}" == "true" ]] && {
+        cleanexit 1
+}
+
+# Create a temporary file to capture stderr output from some commands
+ERR_FILE=$(mktemp /tmp/"${PROGNAME}".XXXXXX) || {
+        err_echo Unable to create temporary file in /tmp/"${PROGNAME}"
+        exit 1
+}
+
+# check_rv function
+# 
+# Looks at the returned text from the last REST call (stored in RESULT) and
+# retrieves the _rv (return code) and makes sure it is greater than or equal
+# to zero.
+#
+# additionally, it will make sure that _rv is even able to be parsed from the 
+# returned JSON data.
+#
+# the arguments passed in are the string to pring along with the error message
+#
+function check_rv()
+{
+        _rv=$(echo "${RESULT}" | jq -e -r ._rv 2> /dev/null); JQ_RETCODE=$?
+
+        # Make sure that _rv is a number and >= 0
+        [[ "${JQ_RETCODE}" -eq 0 && $_rv =~ ^-?[0-9]+$ && $_rv -ge 0  ]] || {
+
+                echo -n "Error ${_rv} $*: "
+                message=$(echo "${RESULT}" | jq -e -r .message 2> /dev/null) && {
+                        echo -n "${message}"
+                }
+                echo
+                return 1
+        }
+        return 0
+}
+
+# Stay in this loop until we have finished with all of the systems.
+while [ $# -gt 0 ]; do
+
+        echo -n "Processing $1: "
+        
+        # Check to see if we can get to the http interface
+        curl -m ${HTTP_TIMEOUT} http://"$1" &> /dev/null || {
+                echo Unable to connect via http, skipping to next system.
+                shift
+                continue
+        }
+        echo -n ". "
+
+        # Set the server for the resty functions, passing -k to tell it to ignore the ssl certificate warning
+        resty "https://$1/rest" -u admin:"${ADMIN_PASS}" -k  &> /dev/null
+
+        # Try to establish a new http/rest session
+        RESULT=$(PUT /new 2> "${ERR_FILE}") || {
+                grep "401 - Unauthorized" "${ERR_FILE}" &> /dev/null 
+                if [ $? -eq 0 ]; then
+                        echo "Incorrect password for admin, skipping to next system."
+                else
+                        echo "Error establishing session, skipping to next system."
+                fi
+                shift
+                continue
+        }
+        echo -n ". "
+
+	check_rv "establishing new http rest session" || { shift; continue; }
+
+        # Parse out the session id
+        session=$(echo "${RESULT}" | jq -e -r .session 2> /dev/null ) || {
+                echo "Error retrieving session number."
+                shift
+                continue
+        }
+
+        # Use the session ID we retrived to check the number of active calls
+        RESULT=$(PUT /request/"${session}" '{ "call": "Conf_getNumConnectedCalls" }') || {
+                echo Error sending rest Conf_getNumConnectedCalls command, skipping to next system.
+                shift
+                continue
+        }
+        echo -n ". "
+
+	check_rv "retrieving active call count" || { shift; continue; }
+
+        TOTAL_CALLS=$(echo "${RESULT}" | jq -e -r .total 2> /dev/null); JQ_RETCODE=$?
+        [[ "${JQ_RETCODE}" -eq 0 && ${TOTAL_CALLS} =~ ^-?[0-9]+$ ]] || {
+                echo "Unable to read total calls value, skipping"
+                shift
+                continue
+        }
+
+        [[ ${TOTAL_CALLS} -eq 0  ]] || {
+                echo System has active calls, skipping.
+                shift
+                continue
+        }
+
+        # Use the session ID we retrived to check for upgrade in progress
+        RESULT=$(PUT /request/"${session}" '{ "call": "Data_getUpgradeInProgress" }') || {
+                echo Error sending rest Data_getUpgradeInProgress command, skipping to next system.
+                shift
+                continue
+        }
+        echo -n ". "
+
+	check_rv "checking for active upgrade" || { shift; continue; }
+
+        UPGRADE_ACTIVE=$(echo "${RESULT}" | jq -e -r .upgradeInProgress 2> /dev/null); JQ_RETCODE=$?
+        [[ "${JQ_RETCODE}" -eq 0 && ${UPGRADE_ACTIVE} =~ ^-?[0-9]+$ ]] || {
+                echo "Error reading active upgrade return value, skipping"
+                shift
+                continue
+        }
+
+        # If the sysetm is in the middle of a reboot, then skip it
+        [[ ${UPGRADE_ACTIVE} -eq 0  ]] || {
+                echo Upgrade in progress, skipping.
+                shift
+                continue
+        }
+
+        # Check to see if the skip reboot flag is set
+        if [ ! -z "${SKIP_REBOOT}" ]; then
+                echo ready to reboot, but skipping
+                shift
+                continue
+        fi
+
+        # Send the reboot command
+        RESULT=$(PUT /request/"${session}" "{ \"call\": \"SysAdmin_reboot\", \"params\": [\"${PROGNAME} script initiated\"] }") || {
+                echo Error sending rest SysAdmin_reboot command, skipping to next system.
+                shift
+                continue
+        }
+        echo -n ". "
+
+	check_rv "attempting to reboot system" || { shift; continue; }
+
+        # If we made it to here, then the reboot command must have returned 0 and we're done
+
+        echo Reboot command successfully sent.
+
+        shift
+
+done
+
+cleanexit 0
