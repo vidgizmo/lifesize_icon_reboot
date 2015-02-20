@@ -17,6 +17,7 @@ To install/run the icon_reboot script, just create a directory, copy the two fil
 
 The normal usage is shown below and show show on your screen when you type in the command above:
 
+<pre>
 Usage: icon_reboot [options] IP [IP ...]
   Options/Arguments:
    -n        run the script, but do NOT do the actual reboot, just report.
@@ -24,6 +25,7 @@ Usage: icon_reboot [options] IP [IP ...]
    -d        enable debug mode
    IP        IP address (or DNS name) of Lifesize Icon. You can have
              one or more IP addresses on the command line.
+</pre>
 
 NOTE:
   The easiest way to provide the list of IP addresses is to put them in a
