@@ -19,6 +19,7 @@ To install/run the icon_reboot script, just create a directory, copy the two fil
 
 The normal usage is shown below and show show on your screen when you type in the command above:
 
+=======
 
 ```
 #!script
@@ -30,6 +31,7 @@ Usage: icon_reboot [options] IP [IP ...]
    -d        enable debug mode
    IP        IP address (or DNS name) of Lifesize Icon. You can have
              one or more IP addresses on the command line.
+=======
 
 ```
 

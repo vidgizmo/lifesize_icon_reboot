@@ -148,7 +148,7 @@ which jq &> /dev/null || {
 
 # Make sure the version of jq has the features we need (specifically the -e option)
 JQ_TEST_VAL=$(echo '{"test":"good"}' | jq -e -r .test 2> /dev/null ) ;  JQ_RETCODE=$?
-[[ "${JQ_RETCODE}" -eq 0 && "$JQ_TEST_VAL" == "good"  ]] || {
+[[ "${JQ_RETCODE}" -eq 0 && "${JQ_TEST_VAL:0:4}" == "good"  ]] || {
         err_echo "This script requires \"jq\" versoin 1.4 or newer."
         err_echo "Your system is running $(jq --version 2>&1)."
         err_echo "You may need to download and build the source from here:"
