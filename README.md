@@ -1,11 +1,12 @@
-
 # README #
 
 ### What is this repository for? ###
 
-The script should run on a mac or linux system.
+This is a script to control a Lifesize Icon series endpoint. Specifically, this script checks on various information from the Icon and then decides if it can reboot it, and then issues the reboot command.
 
 ### What do you need? ###
+
+The script should run on a mac or linux system.
 
 This script requires the following programs to be installed on the system (and it will check for them and report if it cannot find them):
 
