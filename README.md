@@ -11,7 +11,7 @@ The script should run on a mac or linux system.
 This script requires the following programs to be installed on the system (and it will check for them and report if it cannot find them):
 
 * curl
-* resty (provided in this repo)
+* resty (available here https://github.com/micha/resty)
 * jq version 1.4 (probably needs to be installed or even build from source and installed)
 
 ### How do I install/run it? ###
