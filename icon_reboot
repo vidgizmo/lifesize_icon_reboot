@@ -137,6 +137,13 @@ which curl &> /dev/null || {
         MISSING_PROGRAMS=true
 }
 
+# Make sure perl is on this system
+which perl &> /dev/null || { 
+        err_echo "This script requires \"perl\" "
+        err_echo
+        MISSING_PROGRAMS=true
+}
+
 # Make sure jq is on this system
 which jq &> /dev/null || { 
         err_echo "This script requires \"jq\". Use your linux package manager to install it"
@@ -210,10 +217,12 @@ function check_rv()
 # Stay in this loop until we have finished with all of the systems.
 while [ $# -gt 0 ]; do
 
-        echo -n "Processing $1: "
+        # Remove any carriage returns from the variable that may come from a DOS edited file
+        TARGET=$(echo $1 | perl -pe 's/\r//g')
+        echo -n "Processing ${TARGET}: "
         
         # Check to see if we can get to the http interface
-        curl -m ${HTTP_TIMEOUT} http://"$1" &> /dev/null || {
+        curl -m ${HTTP_TIMEOUT} http://"${TARGET}" &> /dev/null || {
                 echo Unable to connect via http, skipping to next system.
                 shift
                 continue
@@ -221,7 +230,7 @@ while [ $# -gt 0 ]; do
         echo -n ". "
 
         # Set the server for the resty functions, passing -k to tell it to ignore the ssl certificate warning
-        resty "https://$1/rest" -u admin:"${ADMIN_PASS}" -k  &> /dev/null
+        resty "https://${TARGET}/rest" -u admin:"${ADMIN_PASS}" -k  &> /dev/null
 
         # Try to establish a new http/rest session
         RESULT=$(PUT /new 2> "${ERR_FILE}") || {
