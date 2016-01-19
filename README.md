@@ -12,7 +12,7 @@ This script requires the following programs to be installed on the system (and i
 
 * curl
 * resty (copy provided in this repo, but the original available here https://github.com/micha/resty)
-* jq version 1.4 (available here http://stedolan.github.io/jq/)
+* jq version 1.4 or later (available here http://stedolan.github.io/jq/)
 
 ### How do I install/run it? ###
 
