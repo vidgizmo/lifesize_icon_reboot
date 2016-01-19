@@ -221,9 +221,9 @@ while [ $# -gt 0 ]; do
         TARGET=$(echo $1 | perl -pe 's/\r//g')
         echo -n "Processing ${TARGET}: "
         
-        # Check to see if we can get to the http interface
-        curl -m ${HTTP_TIMEOUT} http://"${TARGET}" &> /dev/null || {
-                echo Unable to connect via http, skipping to next system.
+        # Check to see if we can get to the https interface
+        curl -k -m ${HTTP_TIMEOUT} https://"${TARGET}" &> /dev/null || {
+                echo Unable to connect via https, skipping to next system.
                 shift
                 continue
         }
